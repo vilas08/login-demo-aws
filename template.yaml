@@ -1,0 +1,136 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Login demo - backend (Lambda, HTTP API, DynamoDB) + frontend hosting (S3, CloudFront) per stage
+
+Parameters:
+  Stage:
+    Type: String
+    AllowedValues: [dev, staging, prod]
+
+Globals:
+  Function:
+    Runtime: nodejs22.x
+    Timeout: 10
+    MemorySize: 256
+
+Resources:
+  # ---------- Backend ----------
+  UsersTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub login-users-${Stage}-vilas
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: email
+          AttributeType: S
+      KeySchema:
+        - AttributeName: email
+          KeyType: HASH
+
+  TokenSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub login-token-secret-${Stage}-vilas
+      GenerateSecretString:
+        PasswordLength: 48
+        ExcludePunctuation: true
+
+  Api:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      CorsConfiguration:
+        AllowOrigins:
+          - !Sub 'https://${CDN.DomainName}'
+          - 'http://localhost:5173'
+        AllowMethods: [GET, POST, OPTIONS]
+        AllowHeaders: [Content-Type, Authorization]
+
+  AuthFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub login-fn-${Stage}-vilas
+      CodeUri: backend/
+      Handler: index.handler
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref UsersTable
+          TOKEN_SECRET: !Sub '{{resolve:secretsmanager:${TokenSecret}:SecretString}}'
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+      Events:
+        Register:
+          Type: HttpApi
+          Properties: { ApiId: !Ref Api, Path: /register, Method: POST }
+        Login:
+          Type: HttpApi
+          Properties: { ApiId: !Ref Api, Path: /login, Method: POST }
+        Me:
+          Type: HttpApi
+          Properties: { ApiId: !Ref Api, Path: /me, Method: GET }
+
+  # ---------- Frontend hosting ----------
+  SiteBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub login-site-${Stage}-${AWS::AccountId}-vilas
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  OAC:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub login-oac-${Stage}-vilas
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  CDN:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub login-demo-${Stage}-vilas
+        DefaultRootObject: index.html
+        Origins:
+          - Id: s3
+            DomainName: !GetAtt SiteBucket.RegionalDomainName
+            OriginAccessControlId: !GetAtt OAC.Id
+            S3OriginConfig:
+              OriginAccessIdentity: ''
+        DefaultCacheBehavior:
+          TargetOriginId: s3
+          ViewerProtocolPolicy: redirect-to-https
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
+        CustomErrorResponses:
+          - { ErrorCode: 403, ResponseCode: 200, ResponsePagePath: /index.html }
+          - { ErrorCode: 404, ResponseCode: 200, ResponsePagePath: /index.html }
+
+  SiteBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref SiteBucket
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub '${SiteBucket.Arn}/*'
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub 'arn:aws:cloudfront::${AWS::AccountId}:distribution/${CDN}'
+
+Outputs:
+  ApiUrl:
+    Value: !Sub 'https://${Api}.execute-api.${AWS::Region}.amazonaws.com'
+  BucketName:
+    Value: !Ref SiteBucket
+  DistributionId:
+    Value: !Ref CDN
+  SiteUrl:
+    Value: !Sub 'https://${CDN.DomainName}'

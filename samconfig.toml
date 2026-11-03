@@ -1,0 +1,28 @@
+version = 0.1
+
+[default.global.parameters]
+region = "us-east-1"
+
+[dev.deploy.parameters]
+stack_name = "login-demo-dev-vilas"
+region = "us-east-1"
+capabilities = "CAPABILITY_IAM"
+resolve_s3 = true
+confirm_changeset = false
+parameter_overrides = "Stage=dev"
+
+[staging.deploy.parameters]
+stack_name = "login-demo-staging-vilas"
+region = "us-east-1"
+capabilities = "CAPABILITY_IAM"
+resolve_s3 = true
+confirm_changeset = false
+parameter_overrides = "Stage=staging"
+
+[prod.deploy.parameters]
+stack_name = "login-demo-prod-vilas"
+region = "us-east-1"
+capabilities = "CAPABILITY_IAM"
+resolve_s3 = true
+confirm_changeset = true
+parameter_overrides = "Stage=prod"

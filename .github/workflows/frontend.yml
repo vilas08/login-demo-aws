@@ -1,0 +1,56 @@
+name: frontend-deploy
+
+on:
+  push:
+    branches: [dev, staging, main]
+    paths: ['frontend/**', '.github/workflows/frontend.yml']
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    # Branch -> stage: dev -> dev, staging -> staging, main -> prod
+    environment: ${{ github.ref_name == 'main' && 'prod' || github.ref_name }}
+    env:
+      STAGE: ${{ github.ref_name == 'main' && 'prod' || github.ref_name }}
+      AWS_REGION: us-east-1
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Read stack outputs
+        run: |
+          STACK=login-demo-$STAGE-vilas
+          out() {
+            aws cloudformation describe-stacks --stack-name $STACK \
+              --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" --output text
+          }
+          echo "API_URL=$(out ApiUrl)"          >> $GITHUB_ENV
+          echo "BUCKET=$(out BucketName)"       >> $GITHUB_ENV
+          echo "DIST_ID=$(out DistributionId)"  >> $GITHUB_ENV
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build
+        working-directory: frontend
+        run: |
+          npm ci
+          VITE_API_URL=$API_URL npm run build
+
+      - name: Upload to S3
+        run: aws s3 sync frontend/dist s3://$BUCKET --delete
+
+      - name: Invalidate CloudFront
+        run: aws cloudfront create-invalidation --distribution-id $DIST_ID --paths "/*"
