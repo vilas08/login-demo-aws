@@ -49,7 +49,7 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: !Sub login-fn-${Stage}-vilas
-      CodeUri: backend/
+      CodeUri: .
       Handler: index.handler
       Environment:
         Variables:
